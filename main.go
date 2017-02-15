@@ -28,22 +28,33 @@ var (
 	password          = kingpin.Flag("password", "Firehose password.").Default("admin").OverrideDefaultFromEnvar("FIREHOSE_PASSWORD").String()
 	skipSSLValidation = kingpin.Flag("skip-ssl-validation", "Please don't").Default("false").OverrideDefaultFromEnvar("SKIP_SSL_VALIDATION").Bool()
 	debug             = kingpin.Flag("debug", "Enable debug mode. This disables forwarding to statsd and prints to stdout").Default("false").OverrideDefaultFromEnvar("DEBUG").Bool()
+	uaaTokenParam     = kingpin.Flag("uaatoken", "Token to use instead of authenticate").Default("").OverrideDefaultFromEnvar("UAA_TOKEN").String()
+	appGUID           = kingpin.Flag("app-guid", "app GUID to stream events from").Default("").OverrideDefaultFromEnvar("APP_GUID").String()
 )
 
 func main() {
+	var (
+		authToken string
+		err       error
+	)
+
 	kingpin.Parse()
 
-	tokenFetcher := &token.UAATokenFetcher{
-		UaaUrl:                *uaaEndpoint,
-		Username:              *username,
-		Password:              *password,
-		InsecureSSLSkipVerify: *skipSSLValidation,
-	}
+	if *uaaTokenParam == "" {
+		tokenFetcher := &token.UAATokenFetcher{
+			UaaUrl:                *uaaEndpoint,
+			Username:              *username,
+			Password:              *password,
+			InsecureSSLSkipVerify: *skipSSLValidation,
+		}
 
-	authToken, err := tokenFetcher.FetchAuthToken()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
+		authToken, err = tokenFetcher.FetchAuthToken()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(-1)
+		}
+	} else {
+		authToken = *uaaTokenParam
 	}
 
 	consumer := noaa.NewConsumer(*dopplerEndpoint, &tls.Config{InsecureSkipVerify: *skipSSLValidation}, nil)
@@ -63,7 +74,11 @@ func main() {
 	go func() {
 		defer close(msgChan)
 		errorChan := make(chan error)
-		go consumer.Firehose(*subscriptionId, authToken, msgChan, errorChan, nil)
+		if *appGUID == "" {
+			go consumer.Firehose(*subscriptionId, authToken, msgChan, errorChan, nil)
+		} else {
+			go consumer.Stream(*appGUID, authToken, msgChan, errorChan, nil)
+		}
 
 		for err := range errorChan {
 			fmt.Fprintf(os.Stderr, "%v\n", err.Error())
